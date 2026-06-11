@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Spotube
 
 A Spotify-style music app: **Spotify Web API** for search/metadata + album art,
@@ -70,3 +71,6 @@ only in server route handlers under `src/app/api/*`. The browser never sees them
 | `src/components/PlayerProvider.tsx` | owns the IFrame player + track state |
 | `src/components/Player.tsx` | bottom player bar UI |
 | `src/components/Sidebar.tsx` · `SearchView.tsx` | layout + search |
+=======
+# spotify-clone
+>>>>>>> 6a1001cdfc6ab08011f991414409c299603c4044
