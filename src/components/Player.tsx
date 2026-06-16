@@ -23,6 +23,8 @@ const ICONS = {
     "M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z",
   repeat:
     "M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z",
+  repeatOne:
+    "M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4zM13 15V9h-1l-2 1v1h1.5v4H13z",
   volume:
     "M3 10v4h4l5 5V5L7 10H3zm13.5 2a4.5 4.5 0 00-2.5-4.03v8.05A4.5 4.5 0 0016.5 12z",
   queue: "M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z",
@@ -60,16 +62,18 @@ export function Player() {
     <footer className="fixed bottom-0 left-0 right-0 z-10 grid h-[90px] grid-cols-3 items-center border-t border-white/10 bg-base px-4">
       {/* Left: now-playing metadata */}
       <div className="flex min-w-0 items-center gap-3">
-        {track?.albumArt ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={track.albumArt}
-            alt={track.name}
-            className="h-14 w-14 rounded shadow"
-          />
-        ) : (
-          <div className="h-14 w-14 rounded bg-highlight" />
-        )}
+        <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded bg-highlight text-xl text-muted">
+          {track?.thumbnail ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={track.thumbnail}
+              alt=""
+              className="h-full w-full object-cover"
+            />
+          ) : (
+            "♪"
+          )}
+        </div>
         <div className="min-w-0">
           <div className="truncate text-sm font-medium text-white">
             {track?.name ?? "Nothing playing"}
@@ -131,12 +135,28 @@ export function Player() {
           <button
             onClick={toggleRepeat}
             className={`transition hover:text-white ${
-              repeat ? "text-accent" : "text-muted"
+              repeat !== "off" ? "text-accent" : "text-muted"
             }`}
-            aria-label="Repeat"
-            aria-pressed={repeat}
+            aria-label={
+              repeat === "one"
+                ? "Repeat one"
+                : repeat === "all"
+                ? "Repeat all"
+                : "Repeat off"
+            }
+            aria-pressed={repeat !== "off"}
+            title={
+              repeat === "one"
+                ? "Repeat one"
+                : repeat === "all"
+                ? "Repeat all"
+                : "Repeat off"
+            }
           >
-            <Icon path={ICONS.repeat} className="h-4 w-4 fill-current" />
+            <Icon
+              path={repeat === "one" ? ICONS.repeatOne : ICONS.repeat}
+              className="h-4 w-4 fill-current"
+            />
           </button>
         </div>
 

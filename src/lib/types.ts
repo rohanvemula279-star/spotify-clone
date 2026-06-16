@@ -1,21 +1,31 @@
-// Shared types used across server utilities and client components.
+// Shared types used across the app.
+
+/** Where a track's metadata originated. */
+export type TrackSource = "youtube" | "saavn";
 
 export interface Track {
   /**
-   * Stable track id used as the cache key. Now sourced from JioSaavn; the
-   * name is kept (and stored in the `spotify_id` column) for compatibility.
+   * Stable identity used for queue keys, library storage, and dedupe.
+   * For YouTube-sourced tracks this is the videoId; for direct JioSaavn
+   * tracks it's the JioSaavn song id.
    */
-  spotifyId: string;
+  id: string;
   name: string;
   artist: string;
   album: string;
-  /** Best-available album art URL (JioSaavn CDN, 500x500). */
-  albumArt: string | null;
-}
-
-/** Shape returned by /api/resolve once a YouTube video id is known. */
-export interface ResolvedTrack extends Track {
-  youtubeVideoId: string;
-  /** true when the mapping came from the Supabase cache (no quota spent). */
-  cached: boolean;
+  /** Track length in seconds (0 if unknown). */
+  duration: number;
+  /**
+   * Direct, playable audio stream URL (JioSaavn CDN). May be null until it
+   * is resolved on demand right before playback via the resolve layer.
+   */
+  audioUrl: string | null;
+  /** Origin of this metadata. Defaults to "saavn" when omitted. */
+  source?: TrackSource;
+  /** YouTube video id, when this track came from a YouTube search. */
+  videoId?: string;
+  /** Cover/thumbnail image URL, when available. */
+  thumbnail?: string;
+  /** True when a downloaded audio blob for this track exists on-device. */
+  downloaded?: boolean;
 }

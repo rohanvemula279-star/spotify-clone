@@ -2,6 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { Track } from "@/lib/types";
+import {
+  searchYoutube,
+  YoutubeKeyMissingError,
+  YoutubeQuotaError,
+} from "@/lib/youtube";
 import { SongCard } from "./SongCard";
 import { GenreCard } from "./GenreCard";
 
@@ -21,6 +26,7 @@ export function SearchView({ initialQuery = "" }: { initialQuery?: string }) {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function runSearch(term: string) {
     const q = term.trim();
@@ -28,19 +34,24 @@ export function SearchView({ initialQuery = "" }: { initialQuery?: string }) {
     setQuery(q);
     setLoading(true);
     setSearched(true);
+    setError(null);
     try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
-      const data = (await res.json()) as { tracks: Track[] };
-      setTracks(data.tracks ?? []);
-    } catch {
+      const results = await searchYoutube(q);
+      setTracks(results);
+    } catch (err) {
       setTracks([]);
+      if (err instanceof YoutubeKeyMissingError)
+        setError(
+          "No YouTube API key set. Add one in Settings to search."
+        );
+      else if (err instanceof YoutubeQuotaError) setError((err as Error).message);
+      else setError("Search failed. Check your connection and try again.");
     } finally {
       setLoading(false);
     }
   }
 
-  // Auto-run a search when the page is opened with ?q=... (e.g. from the
-  // header search box or a genre tile link).
+  // Auto-run a search when opened with ?q=... (header box / genre tile).
   const didInit = useRef(false);
   useEffect(() => {
     if (!didInit.current && initialQuery.trim()) {
@@ -62,12 +73,18 @@ export function SearchView({ initialQuery = "" }: { initialQuery?: string }) {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search for songs…"
+          placeholder="Search any song, artist, or album…"
           className="w-full max-w-md rounded-full bg-white/10 px-5 py-3 text-sm text-white placeholder:text-muted focus:bg-white/15 focus:outline-none"
         />
       </form>
 
       {loading && <p className="text-muted">Searching…</p>}
+
+      {error && !loading && (
+        <div className="mb-6 rounded-lg bg-elevated p-4 text-sm text-red-300">
+          {error}
+        </div>
+      )}
 
       {/* Genre browse grid before any search has run. */}
       {!loading && !searched && (
@@ -86,14 +103,14 @@ export function SearchView({ initialQuery = "" }: { initialQuery?: string }) {
         </>
       )}
 
-      {!loading && searched && tracks.length === 0 && (
+      {!loading && searched && !error && tracks.length === 0 && (
         <p className="text-muted">No results.</p>
       )}
 
       {tracks.length > 0 && (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
           {tracks.map((t) => (
-            <SongCard key={t.spotifyId} track={t} queue={tracks} />
+            <SongCard key={t.id} track={t} queue={tracks} />
           ))}
         </div>
       )}

@@ -1,15 +1,20 @@
+"use client";
+
+import { Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { SearchView } from "@/components/SearchView";
 
-export const dynamic = "force-dynamic";
+function SearchInner() {
+  const params = useSearchParams();
+  const q = params.get("q") ?? "";
+  // Key by the query so navigating ?q=a -> ?q=b remounts and re-runs search.
+  return <SearchView key={q} initialQuery={q} />;
+}
 
-export default function SearchPage({
-  searchParams,
-}: {
-  searchParams: { q?: string };
-}) {
-  // Key by the query so navigating /search?q=a -> /search?q=b remounts the
-  // view and re-runs the search (instead of being blocked by its init guard).
+export default function SearchPage() {
   return (
-    <SearchView key={searchParams.q ?? ""} initialQuery={searchParams.q ?? ""} />
+    <Suspense fallback={<div className="p-6 text-muted">Loading…</div>}>
+      <SearchInner />
+    </Suspense>
   );
 }

@@ -1,76 +1,110 @@
-<<<<<<< HEAD
 # Spotube
 
-A Spotify-style music app: **Spotify Web API** for search/metadata + album art,
-**Supabase** as a `spotify_id → youtube_video_id` cache, and the **YouTube
-IFrame Player** for audio. The cache means you only spend YouTube Data API
-quota the *first* time any given track is played.
+A Spotify-style music app you can ship to the public. Search any song, build a
+personal library, organize songs into folders, and download tracks for fully
+offline playback — all stored **only on the user's own device**. There is no
+backend, no database, and no data collection: every account and every saved
+file stays on the phone.
 
-> ⚠️ This architecture runs against both Spotify's and YouTube's Terms of
-> Service (notably using YouTube as an audio-only backend and keeping the
-> player off-screen). It's fine for personal/learning use — read those ToS
-> before deploying anything public or commercial.
+> ⚠️ Uses the public YouTube Data API (user-supplied key) for search and a
+> public, unofficial JioSaavn API for audio. Review the relevant terms before
+> deploying anything public or commercial.
 
-## Architecture / play flow
+## How it works
 
 ```
-User clicks a track
-   │
-   ▼
-1. Spotify metadata ──► already fetched at search time (/api/search)
-   │
-   ▼
-2. POST /api/resolve { spotifyId, trackName, artistName }
-   │
-   ├─ 3. Supabase track_cache HIT  ──► return youtube_video_id   (0 quota)
-   │
-   └─ 4. MISS ──► YouTube Data API search "name artist official audio"
-                  └─ take first id ──► INSERT into track_cache ──► return it
-   │
-   ▼
-5. Client loads youtube_video_id into the off-screen YT IFrame player
+First launch ─► ask for a YouTube Data API key  (stored on-device)
+            ─► create a local account (username + password)
+
+Search       ─► YouTube Data API     (catalog: title / artist / thumbnail)
+Play         ─► match on JioSaavn     (direct audio stream) ─► HTML5 <audio>
+Download     ─► fetch that stream ─► save Blob in IndexedDB  (offline, on-device)
+Offline play ─► load the saved Blob   (no network needed)
 ```
 
-Secrets (Spotify client secret, YouTube key, Supabase service-role key) live
-only in server route handlers under `src/app/api/*`. The browser never sees them.
+The YouTube key only does **search** (its API can't legally stream audio), so
+audio is resolved by matching each result on JioSaavn. Both the key and the
+match cache live in the browser/WebView — nothing is sent to a server we run.
 
-## Setup
+## First-run experience
 
-1. **Install deps**
-   ```bash
-   npm install
-   ```
+1. **YouTube key gate** — paste a free YouTube Data API v3 key (or skip).
+   Remembered for every later launch; editable in **Settings**.
+2. **Account gate** — sign up with a username + password (hashed on-device) or
+   log back in. Returning users skip straight to the app.
 
-2. **Create the database table.** In the Supabase dashboard → SQL Editor, run
-   the contents of [`supabase/schema.sql`](./supabase/schema.sql).
+Both gates only appear when needed, so second and later launches open directly
+into the app.
 
-3. **Configure env.** Copy the example and fill in real values:
-   ```bash
-   cp .env.local.example .env.local
-   ```
-   - Spotify app: https://developer.spotify.com/dashboard (Client ID + Secret)
-   - YouTube Data API v3 key: Google Cloud Console
-   - Supabase project URL + **service role** key: Project Settings → API
+## Accounts, library & storage (all on-device)
 
-4. **Run**
-   ```bash
-   npm run dev
-   ```
-   Open http://localhost:3000, search a song, and click it to play.
+- **Accounts** are local: username + a salted SHA-256 password hash in
+  `localStorage`. "Recovery" = logging back in with the same credentials.
+  Deleting a account erases its library and downloads. *No server means no
+  cross-device sync and no remote recovery — clearing app data is permanent.*
+- **Library / folders / downloads** live in **IndexedDB**, namespaced per user.
+  Downloaded audio is stored as Blobs that occupy the phone's own storage.
 
-## Files
+## Run on a computer (dev)
+
+```bash
+npm install
+npm run dev
+# open http://localhost:3000
+```
+
+## Build the static web app
+
+```bash
+npm run build      # produces ./out (plain static files)
+```
+
+`out/` can be hosted anywhere; it only needs internet access to reach the
+YouTube and JioSaavn APIs.
+
+## Get the Android APK
+
+The APK is built in the cloud by GitHub Actions (see
+`.github/workflows`), or locally:
+
+```bash
+npm run build
+npx cap add android
+npx cap sync android
+cd android && ./gradlew assembleDebug
+# APK at android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+## Configuration
+
+- **YouTube key** — entered in-app on first run / in Settings (per user/device).
+- **JioSaavn base URL** (optional, build-time) in case the default instance is
+  down:
+
+```bash
+NEXT_PUBLIC_SAAVN_API=https://your-saavn-instance npm run build
+```
+
+## Project layout
 
 | Path | Purpose |
 |------|---------|
-| `supabase/schema.sql` | `track_cache` table + RLS |
-| `src/lib/spotify.ts` | token caching + track search |
-| `src/lib/youtube.ts` | YouTube Data API search (the only quota spend) |
-| `src/lib/supabase.ts` | server-only service-role client |
-| `src/app/api/search/route.ts` | Spotify search endpoint |
-| `src/app/api/resolve/route.ts` | the cache-check / YouTube / insert flow |
-| `src/components/PlayerProvider.tsx` | owns the IFrame player + track state |
-| `src/components/Player.tsx` | bottom player bar UI |
-| `src/components/Sidebar.tsx` · `SearchView.tsx` | layout + search |
-=======
-# spotify-clone
->>>>>>> 6a1001cdfc6ab08011f991414409c299603c4044
+| `src/lib/storage.ts` | typed localStorage (API key, session) |
+| `src/lib/auth.ts` | on-device accounts (hashing, login, delete) |
+| `src/lib/youtube.ts` | YouTube Data API search |
+| `src/lib/resolve.ts` | YouTube result → JioSaavn playable audio (cached) |
+| `src/lib/saavn.ts` | JioSaavn search + audio URL |
+| `src/lib/db.ts` · `library` via `LibraryContext` | IndexedDB: songs, folders, downloaded blobs |
+| `src/context/AuthContext.tsx` | current user + auth actions |
+| `src/context/LibraryContext.tsx` | saved songs, folders, downloads |
+| `src/context/PlayerContext.tsx` | `<audio>` engine (prefers offline blobs) |
+| `src/components/AppGate.tsx` · `gates/*` | first-run key + account flow |
+| `src/components/LibraryView.tsx` · `SettingsView.tsx` | library & settings UI |
+| `capacitor.config.ts` | Android app wrapper config |
+
+## Known limitations
+
+- The YouTube Data API has a daily quota (~100 searches/day on a default free
+  key); the app surfaces quota/invalid-key errors and caches results.
+- Hybrid matching can occasionally miss an obscure track with no JioSaavn
+  equivalent — the app reports it rather than failing silently.

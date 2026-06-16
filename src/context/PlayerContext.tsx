@@ -10,8 +10,10 @@ import {
   useState,
 } from "react";
 import type { Track } from "@/lib/types";
+import { resolvePlayable } from "@/lib/resolve";
+import { useLibrary } from "./LibraryContext";
 
-// MM:SS broken into numeric parts, matching the project blueprint shape.
+// MM:SS broken into numeric parts.
 interface Clock {
   min: number;
   sec: number;
@@ -26,8 +28,16 @@ const ZERO_TIME: TimeState = {
   totalDuration: { min: 0, sec: 0 },
 };
 
+/**
+ * Repeat cycles through three modes:
+ *  - "off": play the queue once and stop at the end.
+ *  - "all": loop the whole queue back to the start.
+ *  - "one": repeat the current song on a loop ("repeat once").
+ */
+export type RepeatMode = "off" | "all" | "one";
+const REPEAT_CYCLE: RepeatMode[] = ["off", "all", "one"];
+
 interface PlayerContextValue {
-  // --- states ---
   track: Track | null;
   isPlaying: boolean;
   isLoading: boolean;
@@ -36,13 +46,11 @@ interface PlayerContextValue {
   volume: number;
   muted: boolean;
   shuffle: boolean;
-  repeat: boolean;
+  repeat: RepeatMode;
   hasNext: boolean;
   hasPrev: boolean;
-  // --- refs (timeline DOM nodes, attached by <Player/>) ---
   seekBg: React.RefObject<HTMLDivElement>;
   seekBar: React.RefObject<HTMLDivElement>;
-  // --- functions ---
   play: () => void;
   pause: () => void;
   /** Play a track by id. Pass a list to (re)set the active queue first. */
@@ -64,8 +72,6 @@ export function usePlayer() {
   return ctx;
 }
 
-const YT_API_SRC = "https://www.youtube.com/iframe_api";
-
 /** Convert a seconds float into {min, sec}. */
 function toClock(seconds: number): Clock {
   const s = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
@@ -73,6 +79,16 @@ function toClock(seconds: number): Clock {
 }
 
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
+  // Library gives us offline blobs + the set of downloaded ids, so playback
+  // prefers a local file (works with no network) before going online.
+  const { localUrl, downloaded } = useLibrary();
+  const localUrlRef = useRef(localUrl);
+  const downloadedRef = useRef(downloaded);
+  useEffect(() => {
+    localUrlRef.current = localUrl;
+    downloadedRef.current = downloaded;
+  }, [localUrl, downloaded]);
+
   const [track, setTrack] = useState<Track | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -82,142 +98,92 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [volume, setVolumeState] = useState(100);
   const [muted, setMuted] = useState(false);
   const [shuffle, setShuffle] = useState(false);
-  const [repeat, setRepeat] = useState(false);
+  const [repeat, setRepeat] = useState<RepeatMode>("off");
 
-  // Refs mirror state for async callbacks (ENDED handler, next/prev) so
-  // they read the latest values without stale closures.
+  // Refs mirror state so async callbacks read the latest values.
   const queueRef = useRef<Track[]>([]);
   const queueIndexRef = useRef(-1);
   const shuffleRef = useRef(false);
-  const repeatRef = useRef(false);
+  const repeatRef = useRef<RepeatMode>("off");
   const volumeRef = useRef(100);
-  const mutedRef = useRef(false);
-  // Mirrors isPlaying so the (stable) keydown handler can read the latest
-  // playback state without re-subscribing the window listener every render.
   const isPlayingRef = useRef(false);
+  // Token to ignore stale async audio resolutions when the user skips fast.
+  const loadTokenRef = useRef(0);
+  // Active object-URL for an offline blob, revoked when the track changes.
+  const objectUrlRef = useRef<string | null>(null);
 
   // Timeline DOM nodes, owned by <Player/> but driven from here.
   const seekBg = useRef<HTMLDivElement>(null);
   const seekBar = useRef<HTMLDivElement>(null);
 
-  const playerRef = useRef<YTPlayer | null>(null);
-  const playerReadyRef = useRef(false);
-  const pendingVideoIdRef = useRef<string | null>(null);
+  // The single HTML5 <audio> element that actually plays sound.
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // --- load a resolved YouTube id into the player --------------------
-  const loadVideo = useCallback((videoId: string) => {
-    if (playerReadyRef.current && playerRef.current) {
-      playerRef.current.loadVideoById(videoId); // autoplays
-    } else {
-      pendingVideoIdRef.current = videoId;
+  // --- core: load + play a track at an index in a list --------------
+  const playTrackAt = useCallback(async (index: number, list: Track[]) => {
+    const t = list[index];
+    const audio = audioRef.current;
+    if (!t || !audio) return;
+
+    const token = ++loadTokenRef.current;
+    setTrack(t);
+    setQueueIndex(index);
+    queueIndexRef.current = index;
+    setIsLoading(true);
+    setIsPlaying(false);
+    setTime(ZERO_TIME);
+    if (seekBar.current) seekBar.current.style.width = "0%";
+
+    // Free the previous local object-URL, if any.
+    if (objectUrlRef.current) {
+      URL.revokeObjectURL(objectUrlRef.current);
+      objectUrlRef.current = null;
     }
-  }, []);
 
-  // --- resolve metadata -> YouTube id -> playback --------------------
-  const playTrackAt = useCallback(
-    async (index: number, list: Track[]) => {
-      const t = list[index];
-      if (!t) return;
+    try {
+      // 1) Offline: a downloaded blob on this device always wins.
+      let src: string | null = null;
+      if (downloadedRef.current.has(t.id)) {
+        src = await localUrlRef.current(t.id);
+        if (src) objectUrlRef.current = src;
+      }
+      // 2) Already-resolved direct stream URL.
+      if (!src) src = t.audioUrl;
+      // 3) Resolve via JioSaavn (covers YouTube-sourced tracks).
+      if (!src) {
+        const resolved = await resolvePlayable(t);
+        src = resolved?.audioUrl ?? null;
+      }
+      // A newer load started while we awaited — abandon this one.
+      if (token !== loadTokenRef.current) return;
 
-      setTrack(t);
-      setQueueIndex(index);
-      queueIndexRef.current = index;
-      setIsLoading(true);
-      setIsPlaying(false);
-      // Reset the timeline for the new track.
-      setTime(ZERO_TIME);
-      if (seekBar.current) seekBar.current.style.width = "0%";
+      if (!src) {
+        console.error("No playable audio source for track", t.name);
+        setIsLoading(false);
+        return;
+      }
 
-      try {
-        const res = await fetch("/api/resolve", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            spotifyId: t.spotifyId,
-            trackName: t.name,
-            artistName: t.artist,
-          }),
-        });
-        if (!res.ok) {
-          console.error("resolve failed", await res.text());
-          setIsLoading(false);
-          return;
-        }
-        const data = (await res.json()) as { youtubeVideoId: string };
-        loadVideo(data.youtubeVideoId);
-      } catch (err) {
-        console.error("resolve error", err);
+      audio.src = src;
+      audio.volume = volumeRef.current / 100;
+      await audio.play();
+    } catch (err) {
+      if (token === loadTokenRef.current) {
+        console.error("playback error", err);
         setIsLoading(false);
       }
-    },
-    [loadVideo]
-  );
-
-  // --- create the (hidden) IFrame player once -----------------------
-  useEffect(() => {
-    function createPlayer() {
-      if (playerRef.current || !window.YT) return;
-      playerRef.current = new window.YT.Player("yt-player", {
-        height: "200",
-        width: "200",
-        playerVars: { autoplay: 0, controls: 0, disablekb: 1, playsinline: 1 },
-        events: {
-          onReady: () => {
-            playerReadyRef.current = true;
-            playerRef.current?.setVolume(volumeRef.current);
-            if (pendingVideoIdRef.current) {
-              playerRef.current?.loadVideoById(pendingVideoIdRef.current);
-              pendingVideoIdRef.current = null;
-            }
-          },
-          onStateChange: (event) => {
-            const S = window.YT?.PlayerState;
-            if (!S) return;
-            const state = event.data;
-            if (state === S.PLAYING) {
-              setIsPlaying(true);
-              setIsLoading(false);
-            } else if (state === S.PAUSED) {
-              setIsPlaying(false);
-            } else if (state === S.BUFFERING) {
-              setIsLoading(true);
-            } else if (state === S.ENDED) {
-              setIsPlaying(false);
-              handleEnded();
-            }
-          },
-          onError: () => {
-            setIsLoading(false);
-            setIsPlaying(false);
-          },
-        },
-      });
     }
-
-    if (window.YT && window.YT.Player) {
-      createPlayer();
-    } else {
-      const prev = window.onYouTubeIframeAPIReady;
-      window.onYouTubeIframeAPIReady = () => {
-        prev?.();
-        createPlayer();
-      };
-      if (!document.querySelector(`script[src="${YT_API_SRC}"]`)) {
-        const tag = document.createElement("script");
-        tag.src = YT_API_SRC;
-        document.body.appendChild(tag);
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // What to do when a track finishes: repeat > shuffle > advance.
+  // What to do when a track finishes: repeat-one > shuffle > advance,
+  // wrapping back to the queue start when repeat is set to "all".
   const handleEnded = useCallback(() => {
+    const audio = audioRef.current;
     const q = queueRef.current;
     const i = queueIndexRef.current;
-    if (repeatRef.current) {
-      playerRef.current?.seekTo(0, true);
-      playerRef.current?.playVideo();
+    // "repeat once": keep looping the current song.
+    if (repeatRef.current === "one" && audio) {
+      audio.currentTime = 0;
+      void audio.play();
       return;
     }
     if (shuffleRef.current && q.length > 1) {
@@ -226,24 +192,40 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       void playTrackAt(r, q);
       return;
     }
-    if (i + 1 < q.length) void playTrackAt(i + 1, q);
+    if (i + 1 < q.length) {
+      void playTrackAt(i + 1, q);
+      return;
+    }
+    // End of the queue: loop back to the start when repeating all.
+    if (repeatRef.current === "all" && q.length > 0) void playTrackAt(0, q);
   }, [playTrackAt]);
 
-  // --- timeline polling: drive the seek bar + MM:SS text ------------
+  // --- create the <audio> element + wire its events once ------------
   useEffect(() => {
-    const id = setInterval(() => {
-      const p = playerRef.current;
-      if (!p || !playerReadyRef.current || typeof p.getDuration !== "function") {
-        return;
-      }
-      const dur = p.getDuration() || 0;
-      const cur = p.getCurrentTime() || 0;
-      // Fill the bar imperatively every tick for smoothness (no re-render).
+    const audio = new Audio();
+    audio.preload = "auto";
+    audioRef.current = audio;
+
+    const onPlaying = () => {
+      setIsPlaying(true);
+      setIsLoading(false);
+    };
+    const onPause = () => setIsPlaying(false);
+    const onWaiting = () => setIsLoading(true);
+    const onEnded = () => {
+      setIsPlaying(false);
+      handleEnded();
+    };
+    const onError = () => {
+      setIsLoading(false);
+      setIsPlaying(false);
+    };
+    const onTimeUpdate = () => {
+      const dur = audio.duration || 0;
+      const cur = audio.currentTime || 0;
       if (seekBar.current) {
         seekBar.current.style.width = dur ? `${(cur / dur) * 100}%` : "0%";
       }
-      // Only push state when the displayed second actually changes, so the
-      // context re-renders ~1x/sec instead of 4x/sec.
       const c = toClock(cur);
       const d = toClock(dur);
       setTime((prev) =>
@@ -254,13 +236,32 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           ? prev
           : { currentTime: c, totalDuration: d }
       );
-    }, 250);
-    return () => clearInterval(id);
-  }, []);
+    };
+
+    audio.addEventListener("playing", onPlaying);
+    audio.addEventListener("pause", onPause);
+    audio.addEventListener("waiting", onWaiting);
+    audio.addEventListener("ended", onEnded);
+    audio.addEventListener("error", onError);
+    audio.addEventListener("timeupdate", onTimeUpdate);
+
+    return () => {
+      audio.removeEventListener("playing", onPlaying);
+      audio.removeEventListener("pause", onPause);
+      audio.removeEventListener("waiting", onWaiting);
+      audio.removeEventListener("ended", onEnded);
+      audio.removeEventListener("error", onError);
+      audio.removeEventListener("timeupdate", onTimeUpdate);
+      audio.pause();
+      audio.src = "";
+    };
+  }, [handleEnded]);
 
   // --- public controls ----------------------------------------------
-  const play = useCallback(() => playerRef.current?.playVideo(), []);
-  const pause = useCallback(() => playerRef.current?.pauseVideo(), []);
+  const play = useCallback(() => {
+    void audioRef.current?.play();
+  }, []);
+  const pause = useCallback(() => audioRef.current?.pause(), []);
 
   const playWithId = useCallback(
     (id: string, list?: Track[]) => {
@@ -269,7 +270,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         setQueue(list);
         queueRef.current = list;
       }
-      const idx = q.findIndex((t) => t.spotifyId === id);
+      const idx = q.findIndex((t) => t.id === id);
       if (idx === -1) return;
       void playTrackAt(idx, q);
     },
@@ -289,50 +290,43 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, [playTrackAt]);
 
   const seekSong = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    const p = playerRef.current;
-    if (!p || !playerReadyRef.current || !seekBg.current) return;
-    const dur = typeof p.getDuration === "function" ? p.getDuration() : 0;
+    const audio = audioRef.current;
+    if (!audio || !seekBg.current) return;
+    const dur = audio.duration || 0;
     if (!dur) return;
     const rect = seekBg.current.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    p.seekTo(ratio * dur, true);
+    audio.currentTime = ratio * dur;
   }, []);
 
   const setVolume = useCallback((v: number) => {
     const clamped = Math.min(100, Math.max(0, v));
     volumeRef.current = clamped;
     setVolumeState(clamped);
-    playerRef.current?.setVolume(clamped);
-    // Any explicit volume change lifts mute (matches Spotify's behaviour).
-    if (mutedRef.current) {
-      mutedRef.current = false;
+    if (audioRef.current) audioRef.current.volume = clamped / 100;
+    if (audioRef.current?.muted) {
+      audioRef.current.muted = false;
       setMuted(false);
-      playerRef.current?.unMute();
     }
   }, []);
 
   const toggleMute = useCallback(() => {
-    const p = playerRef.current;
-    if (!p) return;
+    const audio = audioRef.current;
+    if (!audio) return;
     setMuted((m) => {
       const nextMuted = !m;
-      mutedRef.current = nextMuted;
-      if (nextMuted) p.mute();
-      else p.unMute();
+      audio.muted = nextMuted;
       return nextMuted;
     });
   }, []);
 
   // Seek relative to the current position, clamped to [0, duration].
   const seekBy = useCallback((delta: number) => {
-    const p = playerRef.current;
-    if (!p || !playerReadyRef.current || typeof p.getCurrentTime !== "function") {
-      return;
-    }
-    const dur = typeof p.getDuration === "function" ? p.getDuration() : 0;
-    const cur = p.getCurrentTime() || 0;
-    const target = Math.max(0, dur ? Math.min(dur, cur + delta) : cur + delta);
-    p.seekTo(target, true);
+    const audio = audioRef.current;
+    if (!audio) return;
+    const dur = audio.duration || 0;
+    const cur = audio.currentTime || 0;
+    audio.currentTime = Math.max(0, dur ? Math.min(dur, cur + delta) : cur + delta);
   }, []);
 
   const toggleShuffle = useCallback(() => {
@@ -342,32 +336,29 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  // Cycle off -> all -> one -> off.
   const toggleRepeat = useCallback(() => {
     setRepeat((r) => {
-      repeatRef.current = !r;
-      return !r;
+      const nextMode = REPEAT_CYCLE[(REPEAT_CYCLE.indexOf(r) + 1) % REPEAT_CYCLE.length];
+      repeatRef.current = nextMode;
+      return nextMode;
     });
   }, []);
 
-  // Keep the playback-state ref fresh for the keydown handler below.
+  // Keep the playback-state ref fresh for the keydown handler.
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
 
   // --- global keyboard shortcuts ------------------------------------
-  // Registered once; every action is a stable useCallback (or reads a ref),
-  // so the listener never needs to re-subscribe on state changes.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      // Guard clause: never hijack keys while typing in a field.
       const tag = document.activeElement?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
 
-      // Switch on e.code (physical key) so letter shortcuts are
-      // caps/locale-independent and Space/Arrows map cleanly.
       switch (e.code) {
         case "Space":
-          e.preventDefault(); // stop the page from scrolling down
+          e.preventDefault();
           if (isPlayingRef.current) pause();
           else play();
           break;
@@ -400,12 +391,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           break;
       }
     }
-
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [play, pause, next, previous, seekBy, setVolume, toggleMute]);
 
-  // --- Native Media Session: metadata (system overlay / lock screen) --
+  // --- Native Media Session: metadata (lock screen / notification) ---
   useEffect(() => {
     if (!("mediaSession" in navigator)) return;
     if (!track) {
@@ -416,13 +406,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       title: track.name,
       artist: track.artist,
       album: track.album,
-      artwork: track.albumArt
-        ? [{ src: track.albumArt, sizes: "500x500", type: "image/jpeg" }]
+      artwork: track.thumbnail
+        ? [{ src: track.thumbnail, sizes: "500x500", type: "image/jpeg" }]
         : [],
     });
   }, [track]);
 
-  // --- Native Media Session: playback state + hardware/key handlers ---
   useEffect(() => {
     if (!("mediaSession" in navigator)) return;
     navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
@@ -494,20 +483,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   );
 
   return (
-    <PlayerContext.Provider value={value}>
-      {children}
-      {/*
-        COMPLIANCE: the YouTube IFrame must NOT be display:none or 0x0 or
-        YouTube blocks playback. We keep it at the mandatory 200x200 layout
-        size but throw it ~9999px off the left edge (transparent +
-        non-interactive) so it never shows through the dark-theme UI.
-      */}
-      <div
-        aria-hidden
-        className="fixed top-0 -left-[9999px] w-[200px] h-[200px] pointer-events-none opacity-[0.001] overflow-hidden"
-      >
-        <div id="yt-player" />
-      </div>
-    </PlayerContext.Provider>
+    <PlayerContext.Provider value={value}>{children}</PlayerContext.Provider>
   );
 }

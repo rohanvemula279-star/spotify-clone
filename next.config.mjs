@@ -1,14 +1,15 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Static HTML export — produces a plain `out/` folder with no server.
+  // This is what gets bundled into the Android app (Capacitor) and what
+  // can be opened directly / hosted on any static host.
+  output: "export",
   images: {
-    remotePatterns: [
-      // Spotify album art is served from i.scdn.co (and a few mosaic hosts)
-      { protocol: "https", hostname: "i.scdn.co" },
-      { protocol: "https", hostname: "mosaic.scdn.co" },
-      { protocol: "https", hostname: "image-cdn-ak.spotifycdn.com" },
-      { protocol: "https", hostname: "image-cdn-fa.spotifycdn.com" },
-    ],
+    // No Next.js image optimization server in a static export.
+    unoptimized: true,
   },
+  // Helps static hosting + Capacitor's file:// WebView resolve routes.
+  trailingSlash: true,
 };
 
 export default nextConfig;

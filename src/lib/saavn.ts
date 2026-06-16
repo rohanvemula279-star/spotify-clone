@@ -1,46 +1,41 @@
-import dns from "node:dns";
-// Node 17+ defaults DNS result order to the resolver's order, which puts
-// IPv6 first. On hosts with broken/unreachable IPv6, that makes outbound
-// fetch() hang until the connect timeout. Prefer IPv4.
-dns.setDefaultResultOrder("ipv4first");
+// --- JioSaavn client (runs in the browser, no backend / no secrets) ---
+//
+// A thin wrapper around a public, unauthenticated JioSaavn API instance.
+// It powers BOTH search/metadata AND audio playback: JioSaavn serves the
+// actual audio files (the `downloadUrl` list), so there is no YouTube, no
+// Supabase, and nothing to keep secret. Everything here is safe to ship
+// in the client bundle.
 
 import type { Track } from "./types";
 
-// --- JioSaavn search helper (server-only) --------------------------
-//
-// Public, unauthenticated wrapper around the JioSaavn catalog. No tokens
-// or auth headers are needed — this replaces the old Spotify Web API
-// search and sidesteps its Premium/authorization (403) restrictions.
-//
-// The JioSaavn track `id` is mapped into the `spotifyId` field so the rest
-// of the app (the `Track` contract, the Supabase `spotify_id` column, and
-// the /api/resolve flow) keeps working unchanged.
+// Public JioSaavn API instance (saavn.dev project). Overridable at build
+// time via NEXT_PUBLIC_SAAVN_API in case this instance ever goes down.
+const API_BASE =
+  process.env.NEXT_PUBLIC_SAAVN_API?.replace(/\/$/, "") ||
+  "https://saavn.sumit.co";
 
-const SEARCH_URL = "https://saavn.sumit.co/api/search/songs";
-
-interface SaavnImage {
-  quality: string;
+interface SaavnDownload {
+  quality: string; // "12kbps" ... "320kbps"
   url: string;
 }
-
 interface SaavnArtist {
   name: string;
 }
-
+interface SaavnImage {
+  quality: string; // "50x50" | "150x150" | "500x500"
+  url: string;
+}
 interface SaavnSong {
   id: string;
   name: string;
+  duration?: number | null;
   album?: { name?: string } | null;
+  downloadUrl?: SaavnDownload[];
   image?: SaavnImage[];
   artists?: { primary?: SaavnArtist[] };
 }
 
-interface SaavnSearchResponse {
-  data?: { results?: SaavnSong[] };
-}
-
-// JioSaavn returns titles/artists with HTML entities (e.g. "Tum Hi Ho &amp;
-// Co", "It&#039;s You"). Decode the common ones so the UI shows clean text.
+// JioSaavn returns titles/artists with HTML entities ("It&#039;s You").
 function decodeEntities(value: string): string {
   return value
     .replace(/&amp;/g, "&")
@@ -51,12 +46,20 @@ function decodeEntities(value: string): string {
     .replace(/&gt;/g, ">");
 }
 
-/** Pick the highest-resolution album art (500x500, the last entry). */
-function pickAlbumArt(images: SaavnImage[] | undefined): string | null {
-  if (!images || images.length === 0) return null;
-  // JioSaavn orders images smallest-first (50x50, 150x150, 500x500), so the
-  // last index is the 500x500 high-res art we want.
-  return images[images.length - 1]?.url ?? null;
+/** Pick the highest-bitrate stream from a downloadUrl list. */
+function pickAudio(urls: SaavnDownload[] | undefined): string | null {
+  if (!urls || urls.length === 0) return null;
+  // The list is ordered low -> high bitrate, so the last entry is best
+  // (usually 320kbps). Fall back to whatever is present.
+  return urls[urls.length - 1]?.url ?? null;
+}
+
+/** Pick the highest-resolution cover image from an image list. */
+function pickImage(images: SaavnImage[] | undefined): string | undefined {
+  if (!images || images.length === 0) return undefined;
+  // The list is ordered low -> high resolution, so the last entry is best
+  // (usually 500x500). Fall back to whatever is present.
+  return images[images.length - 1]?.url ?? undefined;
 }
 
 /** Join all primary artists into a single display string. */
@@ -69,31 +72,47 @@ function joinArtists(song: SaavnSong): string {
     .join(", ");
 }
 
+function toTrack(song: SaavnSong): Track {
+  return {
+    id: song.id,
+    name: decodeEntities(song.name),
+    artist: joinArtists(song),
+    album: song.album?.name ? decodeEntities(song.album.name) : "",
+    duration: Number(song.duration) || 0,
+    audioUrl: pickAudio(song.downloadUrl),
+    thumbnail: pickImage(song.image),
+  };
+}
+
+/** Search the JioSaavn catalog and map results to our Track contract. */
 export async function searchTracks(
   query: string,
-  limit = 20
+  limit = 30
 ): Promise<Track[]> {
-  const url = new URL(SEARCH_URL);
+  const url = new URL(`${API_BASE}/api/search/songs`);
   url.searchParams.set("query", query);
-  // Honored by the wrapper when supported; harmless otherwise.
   url.searchParams.set("limit", String(limit));
 
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`JioSaavn search failed (${res.status}): ${detail}`);
-  }
+  const res = await fetch(url.toString(), { cache: "no-store" });
+  if (!res.ok) throw new Error(`JioSaavn search failed (${res.status})`);
 
-  const data = (await res.json()) as SaavnSearchResponse;
-  const results = data.data?.results ?? [];
+  const data = (await res.json()) as {
+    data?: { results?: SaavnSong[] };
+  };
+  return (data.data?.results ?? []).map(toTrack);
+}
 
-  return results.map((item) => ({
-    // JioSaavn id stored as spotifyId to keep the Supabase schema +
-    // client contract identical (see note at top of file).
-    spotifyId: item.id,
-    name: decodeEntities(item.name),
-    artist: joinArtists(item),
-    album: item.album?.name ? decodeEntities(item.album.name) : "",
-    albumArt: pickAlbumArt(item.image),
-  }));
+/**
+ * Resolve a playable audio URL for a track id. Search results normally
+ * already include one; this is the fallback for the rare case they don't.
+ */
+export async function fetchAudioUrl(id: string): Promise<string | null> {
+  const res = await fetch(
+    `${API_BASE}/api/songs/${encodeURIComponent(id)}`,
+    { cache: "no-store" }
+  );
+  if (!res.ok) return null;
+
+  const data = (await res.json()) as { data?: SaavnSong[] };
+  return pickAudio(data.data?.[0]?.downloadUrl);
 }

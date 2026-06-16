@@ -1,39 +1,25 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useLibrary } from "@/context/LibraryContext";
 
-interface Playlist {
-  id: string;
-  name: string;
-}
-
+// App sidebar: brand, primary nav, and the user's playlists. Saved songs and
+// downloads live on the Library page; playlists are listed here for quick
+// access and can be created right from the header + button.
 export function Sidebar() {
-  const [playlists, setPlaylists] = useState<Playlist[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { folders, songs, downloaded, createFolder } = useLibrary();
+  const router = useRouter();
 
-  // Load the user's imported playlists on mount.
-  useEffect(() => {
-    let active = true;
-    fetch("/api/playlists")
-      .then((r) => r.json())
-      .then((d) => {
-        if (active) setPlaylists(d.playlists ?? []);
-      })
-      .catch(() => {
-        /* leave the list empty on failure */
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
+  async function onCreate() {
+    const name = prompt("Playlist name");
+    if (name == null) return;
+    const folder = await createFolder(name);
+    if (folder) router.push(`/library?folder=${encodeURIComponent(folder.id)}`);
+  }
 
   return (
     <aside className="m-2 flex w-64 flex-col gap-2">
-      {/* Brand / primary nav */}
       <div className="rounded-lg bg-elevated p-4">
         <div className="mb-6 flex items-center gap-2 px-2 text-xl font-bold">
           <span className="text-accent">●</span> Spotube
@@ -42,47 +28,49 @@ export function Sidebar() {
           <Link href="/" className="flex items-center gap-3 text-white">
             <span>🏠</span> Home
           </Link>
-          <Link
-            href="/search"
-            className="flex items-center gap-3 hover:text-white"
-          >
+          <Link href="/search" className="flex items-center gap-3 hover:text-white">
             <span>🔍</span> Search
           </Link>
-          <Link
-            href="/admin/import"
-            className="flex items-center gap-3 hover:text-white"
-          >
-            <span>➕</span> Import playlist
+          <Link href="/library" className="flex items-center gap-3 hover:text-white">
+            <span>📚</span> Your Library
+          </Link>
+          <Link href="/settings" className="flex items-center gap-3 hover:text-white">
+            <span>⚙️</span> Settings
           </Link>
         </nav>
       </div>
 
-      {/* Library: imported playlists */}
       <div className="scroll-area flex-1 overflow-y-auto rounded-lg bg-elevated p-4">
-        <div className="mb-4 px-2 text-sm font-semibold text-muted">
-          Your Library
+        <div className="mb-3 flex items-center justify-between px-2 text-sm font-semibold text-muted">
+          <span>Playlists</span>
+          <button
+            onClick={onCreate}
+            aria-label="Create playlist"
+            className="flex h-6 w-6 items-center justify-center rounded-full text-lg leading-none transition hover:bg-white/10 hover:text-white"
+          >
+            +
+          </button>
         </div>
 
-        {loading ? (
+        <div className="mb-3 px-2 text-xs text-muted">
+          {songs.length} saved · {downloaded.size} offline
+        </div>
+
+        {folders.length === 0 ? (
           <div className="rounded-md bg-highlight p-4 text-sm text-muted">
-            Loading…
-          </div>
-        ) : playlists.length === 0 ? (
-          <div className="rounded-md bg-highlight p-4 text-sm text-muted">
-            Playlists you import will show up here.
+            No playlists yet. Tap + to create one, then add songs with the +
+            on any track.
           </div>
         ) : (
           <ul className="flex flex-col gap-1">
-            {playlists.map((pl) => (
-              <li key={pl.id}>
+            {folders.map((f) => (
+              <li key={f.id}>
                 <Link
-                  href={`/playlist/${pl.id}`}
-                  className="flex items-center gap-3 rounded-md px-2 py-2 text-sm text-muted transition hover:bg-white/10 hover:text-white"
+                  href={`/library?folder=${encodeURIComponent(f.id)}`}
+                  className="flex items-center justify-between rounded-md px-2 py-2 text-sm text-muted hover:bg-white/5 hover:text-white"
                 >
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-highlight text-xs">
-                    ♪
-                  </span>
-                  <span className="truncate">{pl.name}</span>
+                  <span className="truncate">📁 {f.name}</span>
+                  <span className="text-xs">{f.trackIds.length}</span>
                 </Link>
               </li>
             ))}

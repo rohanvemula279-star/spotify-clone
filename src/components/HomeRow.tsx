@@ -11,7 +11,7 @@ export function HomeRow({ title, tracks }: { title: string; tracks: Track[] }) {
       <h2 className="mb-4 text-xl font-bold text-white">{title}</h2>
       <div className="scroll-area flex gap-4 overflow-x-auto pb-2">
         {tracks.map((track) => (
-          <SongCard key={track.spotifyId} track={track} queue={tracks} />
+          <SongCard key={track.id} track={track} queue={tracks} />
         ))}
       </div>
     </section>

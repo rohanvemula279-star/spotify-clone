@@ -7,6 +7,10 @@
 /.next/
 /out/
 
+# capacitor (android project is generated fresh by CI)
+/android/
+/ios/
+
 # production
 /build
 
