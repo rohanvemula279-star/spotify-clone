@@ -60,7 +60,7 @@ export function SongCard({ track, queue }: { track: Track; queue: Track[] }) {
   return (
     <div
       onClick={() => playWithId(track.id, queue)}
-      className="group relative w-[170px] shrink-0 cursor-pointer rounded-lg bg-elevated p-4 text-left transition hover:bg-highlight"
+      className="group relative w-full cursor-pointer rounded-lg bg-elevated p-3 text-left transition hover:bg-highlight sm:p-4"
     >
       <div className="relative mb-3 flex aspect-square w-full items-center justify-center overflow-hidden rounded-md bg-gradient-to-br from-highlight to-elevated shadow-lg">
         {track.thumbnail ? (

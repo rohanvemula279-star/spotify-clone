@@ -35,9 +35,15 @@ export function SettingsView() {
   const [key, setKey] = useState("");
   const [keyMsg, setKeyMsg] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
+  // True when this is the web app (not the installed Android APK). Only the web
+  // build offers the APK download. Resolved after mount to stay export-safe.
+  const [isWeb, setIsWeb] = useState(false);
 
   useEffect(() => {
     setKey(getYoutubeKey() ?? "");
+    const cap = (window as { Capacitor?: { isNativePlatform?: () => boolean } })
+      .Capacitor;
+    setIsWeb(!cap?.isNativePlatform?.());
   }, []);
 
   async function saveKey() {
@@ -95,6 +101,29 @@ export function SettingsView() {
           {keyMsg && <span className="text-sm text-muted">{keyMsg}</span>}
         </div>
       </Card>
+
+      {isWeb && (
+        <Card title="Get the Android app">
+          <p className="mb-3 text-sm text-muted">
+            Install Spotube on your phone for a full-screen, app-like experience
+            with offline downloads. Android only.
+          </p>
+          <a
+            href="/spotube.apk"
+            download
+            className="inline-flex items-center gap-2 rounded-full bg-accent px-4 py-2 text-sm font-bold text-black transition hover:scale-[1.02]"
+          >
+            <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden>
+              <path d="M5 20h14v-2H5v2zM12 3v10l4-4 1.4 1.4L12 16 6.6 10.4 8 9l4 4z" />
+            </svg>
+            Download APK
+          </a>
+          <p className="mt-3 text-xs text-muted">
+            After it downloads, open the file and allow installation from your
+            browser when Android prompts you.
+          </p>
+        </Card>
+      )}
 
       <Card title="Storage on this device">
         <div className="grid grid-cols-3 gap-4 text-center">

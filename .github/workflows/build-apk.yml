@@ -8,6 +8,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Needed so the job can commit the built APK back into public/ for the website.
+permissions:
+  contents: write
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
@@ -52,3 +56,21 @@ jobs:
           name: spotube-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      # Publish the APK into the web app so the deployed website (Vercel) can
+      # serve it at /spotube.apk for the "Download APK" button. We commit it
+      # back to main with [skip ci] so this build doesn't trigger itself.
+      - name: Publish APK to website
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk public/spotube.apk
+
+      - name: Commit APK back to repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/spotube.apk
+          if git diff --staged --quiet; then
+            echo "APK unchanged — nothing to commit."
+          else
+            git commit -m "chore: publish APK to website [skip ci]"
+            git push
+          fi

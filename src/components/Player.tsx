@@ -58,11 +58,23 @@ export function Player() {
     toggleRepeat,
   } = usePlayer();
 
+  // A thin, non-interactive progress line for the compact mobile bar (the full
+  // draggable timeline below is desktop-only). Derived from the time state so
+  // it needs no extra DOM ref.
+  const curSecs = time.currentTime.min * 60 + time.currentTime.sec;
+  const totSecs = time.totalDuration.min * 60 + time.totalDuration.sec;
+  const progressPct = totSecs ? Math.min(100, (curSecs / totSecs) * 100) : 0;
+
   return (
-    <footer className="fixed bottom-0 left-0 right-0 z-10 grid h-[90px] grid-cols-3 items-center border-t border-white/10 bg-base px-4">
+    <footer className="fixed bottom-0 left-0 right-0 z-10 flex h-16 items-center justify-between gap-3 border-t border-white/10 bg-base px-3 md:grid md:h-[90px] md:grid-cols-3 md:gap-0 md:px-4">
+      {/* Mobile-only thin progress line pinned to the top edge of the bar. */}
+      <div className="absolute inset-x-0 top-0 h-0.5 bg-white/20 md:hidden">
+        <div className="h-full bg-accent" style={{ width: `${progressPct}%` }} />
+      </div>
+
       {/* Left: now-playing metadata */}
-      <div className="flex min-w-0 items-center gap-3">
-        <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded bg-highlight text-xl text-muted">
+      <div className="flex min-w-0 flex-1 items-center gap-3 md:flex-none">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded bg-highlight text-xl text-muted md:h-14 md:w-14">
           {track?.thumbnail ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -85,8 +97,8 @@ export function Player() {
       </div>
 
       {/* Center: transport controls + timeline */}
-      <div className="flex flex-col items-center justify-center gap-2">
-        <div className="flex items-center gap-5">
+      <div className="flex shrink-0 flex-col items-center justify-center gap-2">
+        <div className="flex items-center gap-3 md:gap-5">
           <button
             onClick={toggleShuffle}
             className={`transition hover:text-white ${
@@ -160,8 +172,9 @@ export function Player() {
           </button>
         </div>
 
-        {/* Timeline: current time | seekBg(seekBar) | total duration */}
-        <div className="flex w-full max-w-[520px] items-center gap-2">
+        {/* Timeline: current time | seekBg(seekBar) | total duration.
+            Desktop only — mobile uses the thin top line above. */}
+        <div className="hidden w-full max-w-[520px] items-center gap-2 md:flex">
           <span className="w-10 text-right text-[11px] tabular-nums text-muted">
             {fmt(time.currentTime)}
           </span>
@@ -182,8 +195,8 @@ export function Player() {
         </div>
       </div>
 
-      {/* Right: volume + queue */}
-      <div className="flex items-center justify-end gap-3">
+      {/* Right: volume + queue (desktop — phones use hardware volume). */}
+      <div className="hidden items-center justify-end gap-3 md:flex">
         <button className="text-muted hover:text-white" aria-label="Queue">
           <Icon path={ICONS.queue} className="h-4 w-4 fill-current" />
         </button>
