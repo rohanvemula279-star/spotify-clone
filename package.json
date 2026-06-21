@@ -7,7 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "sync:android": "npx cap sync android"
+    "sync:android": "npx cap sync android",
+    "open:android": "npx cap open android",
+    "build:apk": "npx cap sync android && cd android && .\\gradlew.bat assembleDebug",
+    "build:apk:release": "npx cap sync android && cd android && .\\gradlew.bat assembleRelease"
   },
   "dependencies": {
     "@types/crypto-js": "^4.2.2",
