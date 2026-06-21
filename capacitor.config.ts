@@ -1,8 +1,8 @@
 import type { CapacitorConfig } from "@capacitor/cli";
 
 const config: CapacitorConfig = {
-  appId: "com.spotube.app",
-  appName: "Spotube",
+  appId: "com.flowz.app",
+  appName: "Flowz",
   // Next.js static export output folder.
   webDir: "out",
 };

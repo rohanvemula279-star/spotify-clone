@@ -22,7 +22,7 @@ export function Sidebar() {
     <aside className="m-2 hidden w-64 flex-col gap-2 md:flex">
       <div className="rounded-lg bg-elevated p-4">
         <div className="mb-6 flex items-center gap-2 px-2 text-xl font-bold">
-          <span className="text-accent">●</span> Spotube
+          <span className="text-accent">●</span> Flowz
         </div>
         <nav className="flex flex-col gap-4 text-sm font-semibold text-muted">
           <Link href="/" className="flex items-center gap-3 text-white">

@@ -47,6 +47,7 @@ interface PlayerContextValue {
   muted: boolean;
   shuffle: boolean;
   repeat: RepeatMode;
+  radio: boolean;
   hasNext: boolean;
   hasPrev: boolean;
   seekBg: React.RefObject<HTMLDivElement>;
@@ -57,11 +58,14 @@ interface PlayerContextValue {
   playWithId: (id: string, list?: Track[]) => void;
   next: () => void;
   previous: () => void;
-  seekSong: (e: React.MouseEvent<HTMLDivElement>) => void;
+  seekSong: (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => void;
   setVolume: (v: number) => void;
   toggleMute: () => void;
   toggleShuffle: () => void;
   toggleRepeat: () => void;
+  toggleRadio: () => void;
+  /** Extend queue with more tracks (radio auto-fill). */
+  extendQueue: (extra: Track[]) => void;
 }
 
 const PlayerContext = createContext<PlayerContextValue | null>(null);
@@ -99,18 +103,28 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [muted, setMuted] = useState(false);
   const [shuffle, setShuffle] = useState(false);
   const [repeat, setRepeat] = useState<RepeatMode>("off");
+  // Autoplay (Echo Brain) is on by default so music never stops; the user can
+  // turn it off via toggleRadio.
+  const [radio, setRadio] = useState(true);
 
   // Refs mirror state so async callbacks read the latest values.
   const queueRef = useRef<Track[]>([]);
   const queueIndexRef = useRef(-1);
   const shuffleRef = useRef(false);
   const repeatRef = useRef<RepeatMode>("off");
+  const radioRef = useRef(true);
   const volumeRef = useRef(100);
   const isPlayingRef = useRef(false);
   // Token to ignore stale async audio resolutions when the user skips fast.
   const loadTokenRef = useRef(0);
   // Active object-URL for an offline blob, revoked when the track changes.
   const objectUrlRef = useRef<string | null>(null);
+  // Guards the background autoplay prefetch from running twice at once.
+  const extendingRef = useRef(false);
+  // Indirection so playTrackAt / handleEnded (defined earlier) can call the
+  // later-defined autoplay helpers without a temporal-dead-zone / dep cycle.
+  const ensureUpcomingRef = useRef<(index: number, list: Track[]) => void>();
+  const generateAndPlayRadioRef = useRef<(seed: Track) => void>();
 
   // Timeline DOM nodes, owned by <Player/> but driven from here.
   const seekBg = useRef<HTMLDivElement>(null);
@@ -166,6 +180,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       audio.src = src;
       audio.volume = volumeRef.current / 100;
       await audio.play();
+
+      // Reached the last queued track — prefetch the next batch so autoplay
+      // is seamless when this song ends.
+      ensureUpcomingRef.current?.(index, list);
     } catch (err) {
       if (token === loadTokenRef.current) {
         console.error("playback error", err);
@@ -197,8 +215,78 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     // End of the queue: loop back to the start when repeating all.
-    if (repeatRef.current === "all" && q.length > 0) void playTrackAt(0, q);
+    if (repeatRef.current === "all" && q.length > 0) {
+      void playTrackAt(0, q);
+      return;
+    }
+    // Autoplay (Echo Brain): keep music going with fresh related tracks.
+    if (radioRef.current && q.length > 0) {
+      const seed = q[i] ?? q[q.length - 1];
+      void generateAndPlayRadioRef.current?.(seed);
+    }
   }, [playTrackAt]);
+
+  // Echo Brain: fetch fresh related tracks for the seed and play the next one.
+  // If a background prefetch already appended upcoming tracks, just advance.
+  const generateAndPlayRadio = useCallback(async (seed: Track) => {
+    const q0 = queueRef.current;
+    const i0 = queueIndexRef.current;
+    // Prefetch already filled the queue — just play what's next.
+    if (i0 + 1 < q0.length) {
+      void playTrackAt(i0 + 1, q0);
+      return;
+    }
+    try {
+      const { getAutoplayTracks } = await import("@/lib/recommendation");
+      const previous = i0 >= 1 ? q0[i0 - 1] : null;
+      const next = await getAutoplayTracks(seed, {
+        previous,
+        exclude: new Set(q0.map((t) => t.id)),
+        count: 20,
+      });
+      if (next.length > 0) {
+        const newQueue = [...q0, ...next];
+        queueRef.current = newQueue;
+        setQueue(newQueue);
+        void playTrackAt(i0 + 1, newQueue);
+      }
+    } catch {}
+  }, [playTrackAt]);
+
+  // Seamless autoplay: when the listener reaches the last queued track, quietly
+  // fetch the next batch in the background so playback never stops or stutters.
+  const ensureUpcoming = useCallback(async (index: number, list: Track[]) => {
+    if (extendingRef.current) return;
+    if (index < list.length - 1) return; // still have songs queued ahead
+    const seed = list[index];
+    if (!seed || !radioRef.current) return;
+    extendingRef.current = true;
+    try {
+      const { getAutoplayTracks } = await import("@/lib/recommendation");
+      const previous = index >= 1 ? list[index - 1] : null;
+      const next = await getAutoplayTracks(seed, {
+        previous,
+        exclude: new Set(list.map((t) => t.id)),
+        count: 20,
+      });
+      // Only append if the user hasn't switched to a different queue meanwhile.
+      if (next.length > 0 && queueRef.current === list) {
+        const newQueue = [...list, ...next];
+        queueRef.current = newQueue;
+        setQueue(newQueue);
+      }
+    } catch {
+      /* ignore — fallback happens on track end */
+    } finally {
+      extendingRef.current = false;
+    }
+  }, []);
+
+  // Keep the indirection refs pointed at the latest autoplay callbacks.
+  useEffect(() => {
+    ensureUpcomingRef.current = ensureUpcoming;
+    generateAndPlayRadioRef.current = generateAndPlayRadio;
+  }, [ensureUpcoming, generateAndPlayRadio]);
 
   // --- create the <audio> element + wire its events once ------------
   useEffect(() => {
@@ -289,13 +377,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (i - 1 >= 0) void playTrackAt(i - 1, q);
   }, [playTrackAt]);
 
-  const seekSong = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+  const seekSong = useCallback((e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
     const audio = audioRef.current;
     if (!audio || !seekBg.current) return;
     const dur = audio.duration || 0;
     if (!dur) return;
+    const clientX = "touches" in e ? e.touches[0].clientX : e.clientX;
     const rect = seekBg.current.getBoundingClientRect();
-    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
     audio.currentTime = ratio * dur;
   }, []);
 
@@ -343,6 +432,20 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       repeatRef.current = nextMode;
       return nextMode;
     });
+  }, []);
+
+  const toggleRadio = useCallback(() => {
+    setRadio((r) => {
+      radioRef.current = !r;
+      return !r;
+    });
+  }, []);
+
+  const extendQueue = useCallback((extra: Track[]) => {
+    const q = queueRef.current;
+    const newQueue = [...q, ...extra];
+    queueRef.current = newQueue;
+    setQueue(newQueue);
   }, []);
 
   // Keep the playback-state ref fresh for the keydown handler.
@@ -443,6 +546,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       muted,
       shuffle,
       repeat,
+      radio,
       hasNext: queueIndex >= 0 && queueIndex < queue.length - 1,
       hasPrev: queueIndex > 0,
       seekBg,
@@ -457,6 +561,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       toggleMute,
       toggleShuffle,
       toggleRepeat,
+      toggleRadio,
+      extendQueue,
     }),
     [
       track,
@@ -468,6 +574,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       muted,
       shuffle,
       repeat,
+      radio,
       queueIndex,
       play,
       pause,
@@ -479,6 +586,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       toggleMute,
       toggleShuffle,
       toggleRepeat,
+      toggleRadio,
+      extendQueue,
     ]
   );
 

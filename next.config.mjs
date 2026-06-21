@@ -1,15 +1,18 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Static HTML export — produces a plain `out/` folder with no server.
-  // This is what gets bundled into the Android app (Capacitor) and what
-  // can be opened directly / hosted on any static host.
-  output: "export",
+  // Runs as a normal Next.js server app (e.g. Vercel). This is required so
+  // the /app/api/saavn/* proxy routes work — JioSaavn blocks direct browser
+  // calls (no CORS), so search + audio resolution go through our backend.
+  //
+  // The Android APK (Capacitor) loads the deployed site URL rather than a
+  // bundled static build; set capacitor.config server.url when packaging.
   images: {
-    // No Next.js image optimization server in a static export.
     unoptimized: true,
+    remotePatterns: [
+      { protocol: "https", hostname: "**.saavncdn.com" },
+      { protocol: "https", hostname: "**.jiosaavn.com" },
+    ],
   },
-  // Helps static hosting + Capacitor's file:// WebView resolve routes.
-  trailingSlash: true,
 };
 
 export default nextConfig;

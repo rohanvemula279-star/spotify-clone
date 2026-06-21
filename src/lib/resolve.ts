@@ -7,6 +7,7 @@
 
 import type { Track } from "./types";
 import { searchTracks } from "./saavn";
+import { resolveAudioUrl } from "./innerTube";
 
 // videoId -> resolved JioSaavn audio URL (or null if no match found).
 const audioCache = new Map<string, string | null>();
@@ -63,7 +64,18 @@ export async function resolvePlayable(track: Track): Promise<Track | null> {
   }
 
   // Require a minimum overlap so we don't play a wildly wrong song.
-  const url = best && bestScore >= 0.2 ? best.audioUrl : null;
+  let url = best && bestScore >= 0.2 ? best.audioUrl : null;
+
+  // Fallback: try YouTube Music (InnerTune) when this is a YouTube-sourced track
+  // and JioSaavn couldn't find a match.
+  if (!url && track.videoId) {
+    try {
+      url = await resolveAudioUrl(track.videoId);
+    } catch {
+      /* ignore */
+    }
+  }
+
   audioCache.set(cacheKey, url);
   if (!url) return null;
 

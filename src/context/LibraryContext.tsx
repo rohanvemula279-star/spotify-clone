@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import type { Track } from "@/lib/types";
@@ -25,6 +26,8 @@ import {
   deleteBlob,
 } from "@/lib/db";
 import { resolvePlayable } from "@/lib/resolve";
+import { detectLanguage } from "@/lib/recommendation/language";
+import type { BehaviorEvent, PlayContext } from "@/lib/recommendation";
 
 interface LibraryContextValue {
   songs: SavedSong[];
@@ -39,6 +42,7 @@ interface LibraryContextValue {
   isSaved: (id: string) => boolean;
   saveSong: (t: Track) => Promise<void>;
   unsaveSong: (id: string) => Promise<void>;
+  shareTrack: (t: Track) => void;
 
   createFolder: (name: string) => Promise<Folder | null>;
   removeFolder: (id: string) => Promise<void>;
@@ -72,6 +76,42 @@ export function LibraryProvider({ children }: { children: React.ReactNode }) {
   const [downloaded, setDownloaded] = useState<Set<string>>(new Set());
   const [downloadBytes, setDownloadBytes] = useState(0);
   const [downloading, setDownloading] = useState<Record<string, number>>({});
+
+  const sessionRef = useRef(Date.now());
+  const sessionCountRef = useRef(0);
+
+  const recordExplicitFeedback = useCallback(
+    async (t: Track, type: "save" | "unsave" | "shazam") => {
+      try {
+        const { recordBehavior } = await import("@/lib/recommendation");
+        const ctx: PlayContext = {
+          hourOfDay: new Date().getHours(),
+          dayOfWeek: new Date().getDay(),
+          deviceType: "web",
+          sessionId: `session_${sessionRef.current}`,
+          sessionTrackCount: ++sessionCountRef.current,
+        };
+        const event: BehaviorEvent = {
+          trackId: t.id,
+          track: { ...t, language: t.language || detectLanguage(t) },
+          type,
+          timestamp: Date.now(),
+          context: ctx,
+        };
+        recordBehavior(event);
+
+        const { encodeUserTower, encodeSongTower, updateTwoTowerWeights } =
+          await import("@/lib/recommendation/twoTower");
+        const { loadProfile } = await import("@/lib/recommendation/profile");
+        const profile = loadProfile();
+        const userEmb = encodeUserTower(profile, ctx);
+        const songEmb = encodeSongTower(event.track);
+        const feedback = type === "save" ? 1 : 0;
+        updateTwoTowerWeights(userEmb, songEmb, feedback);
+      } catch {}
+    },
+    []
+  );
 
   // (Re)load everything when the active user changes.
   const reload = useCallback(async () => {
@@ -112,17 +152,42 @@ export function LibraryProvider({ children }: { children: React.ReactNode }) {
       if (!owner) return;
       await putSong(owner, t);
       await reload();
+      await recordExplicitFeedback(t, "save");
     },
-    [owner, reload]
+    [owner, reload, recordExplicitFeedback]
   );
 
   const unsaveSong = useCallback(
     async (id: string) => {
       if (!owner) return;
+      const track = songs.find((s) => s.id === id);
       await deleteSong(owner, id);
       await reload();
+      if (track) {
+        await recordExplicitFeedback(track, "unsave");
+      }
     },
-    [owner, reload]
+    [owner, reload, songs, recordExplicitFeedback]
+  );
+
+  const shareTrack = useCallback(
+    async (t: Track) => {
+      if (navigator.share) {
+        try {
+          await navigator.share({
+            title: t.name,
+            text: `${t.name} by ${t.artist}`,
+            url: window.location.href,
+          });
+        } catch {}
+      } else {
+        await navigator.clipboard.writeText(
+          `${t.name} by ${t.artist}`
+        );
+      }
+      await recordExplicitFeedback(t, "shazam");
+    },
+    [recordExplicitFeedback]
   );
 
   // --- folders ---------------------------------------------------------
@@ -261,6 +326,7 @@ export function LibraryProvider({ children }: { children: React.ReactNode }) {
       isSaved,
       saveSong,
       unsaveSong,
+      shareTrack,
       createFolder,
       removeFolder,
       addToFolder,
@@ -278,6 +344,7 @@ export function LibraryProvider({ children }: { children: React.ReactNode }) {
       isSaved,
       saveSong,
       unsaveSong,
+      shareTrack,
       createFolder,
       removeFolder,
       addToFolder,

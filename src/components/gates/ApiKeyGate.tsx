@@ -43,7 +43,7 @@ export function ApiKeyGate({ onDone }: { onDone: () => void }) {
   return (
     <GateShell title="Connect YouTube Search">
       <p className="mb-6 text-sm leading-relaxed text-muted">
-        Spotube searches YouTube&apos;s catalog and plays the matching audio.
+        Flowz searches YouTube&apos;s catalog and plays the matching audio.
         Paste a free <strong className="text-white">YouTube Data API v3</strong>{" "}
         key to enable search. It is stored only on this device and never shared.
       </p>

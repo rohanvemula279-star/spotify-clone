@@ -1,6 +1,7 @@
 "use client";
 
 import { usePlayer } from "@/context/PlayerContext";
+import { ShazamButton } from "./ShazamButton";
 
 function Icon({ path, className }: { path: string; className?: string }) {
   return (
@@ -25,6 +26,7 @@ const ICONS = {
     "M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z",
   repeatOne:
     "M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4zM13 15V9h-1l-2 1v1h1.5v4H13z",
+  radio: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z",
   volume:
     "M3 10v4h4l5 5V5L7 10H3zm13.5 2a4.5 4.5 0 00-2.5-4.03v8.05A4.5 4.5 0 0016.5 12z",
   queue: "M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z",
@@ -54,23 +56,15 @@ export function Player() {
     setVolume,
     shuffle,
     repeat,
+    radio,
     toggleShuffle,
     toggleRepeat,
+    toggleRadio,
   } = usePlayer();
-
-  // A thin, non-interactive progress line for the compact mobile bar (the full
-  // draggable timeline below is desktop-only). Derived from the time state so
-  // it needs no extra DOM ref.
-  const curSecs = time.currentTime.min * 60 + time.currentTime.sec;
-  const totSecs = time.totalDuration.min * 60 + time.totalDuration.sec;
-  const progressPct = totSecs ? Math.min(100, (curSecs / totSecs) * 100) : 0;
 
   return (
     <footer className="fixed bottom-0 left-0 right-0 z-10 flex h-16 items-center justify-between gap-3 border-t border-white/10 bg-base px-3 md:grid md:h-[90px] md:grid-cols-3 md:gap-0 md:px-4">
-      {/* Mobile-only thin progress line pinned to the top edge of the bar. */}
-      <div className="absolute inset-x-0 top-0 h-0.5 bg-white/20 md:hidden">
-        <div className="h-full bg-accent" style={{ width: `${progressPct}%` }} />
-      </div>
+
 
       {/* Left: now-playing metadata */}
       <div className="flex min-w-0 flex-1 items-center gap-3 md:flex-none">
@@ -99,6 +93,18 @@ export function Player() {
       {/* Center: transport controls + timeline */}
       <div className="flex shrink-0 flex-col items-center justify-center gap-2">
         <div className="flex items-center gap-3 md:gap-5">
+          <button
+            onClick={toggleRadio}
+            className={`transition hover:text-white ${
+              radio ? "text-accent" : "text-muted"
+            }`}
+            aria-label="Radio"
+            aria-pressed={radio}
+            title={radio ? "Radio: infinite similar tracks" : "Radio: off"}
+          >
+            <Icon path={ICONS.radio} className="h-4 w-4 fill-current" />
+          </button>
+
           <button
             onClick={toggleShuffle}
             className={`transition hover:text-white ${
@@ -172,16 +178,17 @@ export function Player() {
           </button>
         </div>
 
-        {/* Timeline: current time | seekBg(seekBar) | total duration.
-            Desktop only — mobile uses the thin top line above. */}
-        <div className="hidden w-full max-w-[520px] items-center gap-2 md:flex">
+        {/* Timeline: current time | seekBg(seekBar) | total duration. */}
+        <div className="flex w-full max-w-[520px] items-center gap-2 md:flex">
           <span className="w-10 text-right text-[11px] tabular-nums text-muted">
             {fmt(time.currentTime)}
           </span>
           <div
             ref={seekBg}
             onClick={seekSong}
-            className="group relative h-1 flex-1 cursor-pointer rounded-full bg-white/30"
+            onTouchStart={(e) => { e.stopPropagation(); seekSong(e); }}
+            onTouchMove={(e) => { e.stopPropagation(); seekSong(e); }}
+            className="group relative h-1 flex-1 cursor-pointer rounded-full bg-white/30 md:h-1"
           >
             <div
               ref={seekBar}
@@ -195,8 +202,9 @@ export function Player() {
         </div>
       </div>
 
-      {/* Right: volume + queue (desktop — phones use hardware volume). */}
+      {/* Right: shazam + volume + queue (desktop — phones use hardware volume). */}
       <div className="hidden items-center justify-end gap-3 md:flex">
+        <ShazamButton />
         <button className="text-muted hover:text-white" aria-label="Queue">
           <Icon path={ICONS.queue} className="h-4 w-4 fill-current" />
         </button>

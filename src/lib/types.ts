@@ -1,7 +1,7 @@
 // Shared types used across the app.
 
 /** Where a track's metadata originated. */
-export type TrackSource = "youtube" | "saavn";
+export type TrackSource = "youtube" | "saavn" | "shazam";
 
 export interface Track {
   /**
@@ -28,4 +28,6 @@ export interface Track {
   thumbnail?: string;
   /** True when a downloaded audio blob for this track exists on-device. */
   downloaded?: boolean;
+  /** Inferred language of the track (telugu, hindi, tamil, etc.). */
+  language?: string;
 }
